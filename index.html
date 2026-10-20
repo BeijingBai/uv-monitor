@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIAO 紫外线监测仪</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; text-align: center; padding: 20px; }
+        .card { background: white; border-radius: 15px; padding: 20px; margin: 20px auto; max-width: 400px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; font-size: 24px; }
+        button { background-color: #007bff; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; margin-bottom: 15px; }
+        button:disabled { background-color: #ccc; }
+        .data-row { font-size: 20px; margin: 10px 0; color: #333; }
+        .value { font-weight: bold; color: #d9534f; }
+        select { font-size: 16px; padding: 8px; border-radius: 5px; width: 100%; margin-top: 10px; }
+        .status { font-size: 14px; color: #666; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>☀️ 紫外线监测仪</h1>
+        <button id="connectBtn">连接设备</button>
+        <div class="status" id="statusText">状态：未连接</div>
+    </div>
+
+    <div class="card">
+        <div class="data-row">实时紫外线 (UVI): <span class="value" id="uviValue">--</span></div>
+        <div class="data-row">累积剂量 (D_eff): <span class="value" id="deffValue">--</span></div>
+    </div>
+
+    <div class="card">
+        <label for="spfSelect" style="font-weight: bold;">选择防晒霜 (SPF):</label>
+        <select id="spfSelect" disabled>
+            <option value="1">无防护 (SPF 1)</option>
+            <option value="15">SPF 15</option>
+            <option value="30">SPF 30</option>
+            <option value="50">SPF 50</option>
+        </select>
+    </div>
+
+    <script>
+        // 必须和 ESP32 里的 UUID 一模一样！
+        const SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+        const RX_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"; // 手机写入
+        const TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"; // 手机接收
+
+        let bluetoothDevice, rxCharacteristic, txCharacteristic;
+
+        // 1. 点击连接按钮
+        document.getElementById('connectBtn').addEventListener('click', async () => {
+            try {
+                document.getElementById('statusText').innerText = "状态：正在搜索...";
+                // 弹出蓝牙选择框
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'XIAO-UV-Monitor' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                const server = await bluetoothDevice.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                
+                // 获取写入和接收特征值
+                rxCharacteristic = await service.getCharacteristic(RX_UUID);
+                txCharacteristic = await service.getCharacteristic(TX_UUID);
+
+                // 开启通知（接收数据）
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', handleData);
+
+                document.getElementById('statusText').innerText = "状态：已连接 ✅";
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('spfSelect').disabled = false;
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('statusText').innerText = "状态：连接失败 ❌";
+            }
+        });
+
+        // 2. 收到数据时的处理函数
+        function handleData(event) {
+            let value = event.target.value;
+            // 将字节数据转为字符串（假设ESP32发来的是 "UVI:3.5,D_eff:10.2" 这种格式）
+            let decoder = new TextDecoder('utf-8');
+            let text = decoder.decode(value); 
+            
+            // 简单解析（以后可以改成JSON）
+            try {
+                let parts = text.split(',');
+                let uvi = parts[0].split(':')[1];
+                let deff = parts[1].split(':')[1];
+                document.getElementById('uviValue').innerText = uvi;
+                document.getElementById('deffValue').innerText = deff;
+            } catch(e) {
+                console.log("解析错误", text);
+            }
+        }
+
+        // 3. 下拉框改变时，发送 SPF 值给 ESP32
+        document.getElementById('spfSelect').addEventListener('change', async (event) => {
+            if (!rxCharacteristic) return;
+            let spfValue = event.target.value;
+            
+            // 把字符串 "30" 转成字节发送
+            let encoder = new TextEncoder('utf-8');
+            let data = encoder.encode(spfValue);
+            
+            await rxCharacteristic.writeValue(data);
+            console.log("已发送 SPF:", spfValue);
+        });
+    </script>
+</body>
+</html>
